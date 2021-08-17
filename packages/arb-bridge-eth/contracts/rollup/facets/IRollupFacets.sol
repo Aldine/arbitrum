@@ -171,10 +171,17 @@ interface IRollupAdmin {
     ) external;
 
     /**
-     * @notice Updates a sequencer address at the sequencer inbox
-     * @param newSequencer new sequencer address to be used
+     * @notice Updates if an address is a sequencer at the sequencer inbox
+     * @param addr Address to change if it's a sequencer
+     * @param isSequencer If this address should be a sequencer or not
      */
-    function setSequencer(address newSequencer) external;
+    function setIsSequencer(address addr, bool isSequencer) external;
+
+    /**
+     * @notice Updates the deprecated sequencer address at the sequencer inbox
+     * @param newSequencer Address to set the deprecated sequencer field to
+     */
+    function setDeprecatedSequencer(address newSequencer) external;
 
     /**
      * @notice Upgrades the implementation of a beacon controlled by the rollup

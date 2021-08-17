@@ -48,9 +48,14 @@ interface ISequencerInbox {
         uint256 seqBatchIndex
     );
 
+    // DEPRECATED - look at IsSequencerUpdated for new updates
     event SequencerAddressUpdated(address newAddress);
 
-    function setSequencer(address newSequencer) external;
+    event IsSequencerUpdated(address addr, bool isSequencer);
+
+    function setIsSequencer(address addr, bool isSequencer) external;
+
+    function setDeprecatedSequencer(address newSequencer) external;
 
     function messageCount() external view returns (uint256);
 

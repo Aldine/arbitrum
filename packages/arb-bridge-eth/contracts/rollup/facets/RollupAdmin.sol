@@ -224,11 +224,21 @@ contract RollupAdminFacet is RollupBase, IRollupAdmin {
     }
 
     /**
-     * @notice Updates a sequencer address at the sequencer inbox
-     * @param newSequencer new sequencer address to be used
+     * @notice Updates if an address is a sequencer at the sequencer inbox
+     * @param addr Address to change if it's a sequencer
+     * @param isSequencer If this address should be a sequencer or not
      */
-    function setSequencer(address newSequencer) external override {
-        ISequencerInbox(sequencerBridge).setSequencer(newSequencer);
+    function setIsSequencer(address addr, bool isSequencer) external override {
+        ISequencerInbox(sequencerBridge).setIsSequencer(addr, isSequencer);
+        emit OwnerFunctionCalled(21);
+    }
+
+    /**
+     * @notice Updates the deprecated sequencer address at the sequencer inbox
+     * @param newSequencer Address to set the deprecated sequencer field to
+     */
+    function setDeprecatedSequencer(address newSequencer) external override {
+        ISequencerInbox(sequencerBridge).setDeprecatedSequencer(newSequencer);
         emit OwnerFunctionCalled(19);
     }
 
@@ -295,7 +305,7 @@ contract RollupAdminFacet is RollupBase, IRollupAdmin {
                 false
             );
         // TODO: should we add a stake?
-        
+
         require(expectedNodeHash == nodeHash, "NOT_EXPECTED_HASH");
     }
 

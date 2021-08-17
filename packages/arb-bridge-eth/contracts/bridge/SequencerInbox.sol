@@ -36,8 +36,9 @@ contract SequencerInbox is ISequencerInbox, Cloneable {
     uint256 public totalDelayedMessagesRead;
 
     IBridge public delayedInbox;
-    address public sequencer;
+    address private deprecatedSequencer;
     address public rollup;
+    mapping(address => bool) private newSequencerMap;
 
     function initialize(
         IBridge _delayedInbox,
@@ -46,14 +47,33 @@ contract SequencerInbox is ISequencerInbox, Cloneable {
     ) external {
         require(address(delayedInbox) == address(0), "ALREADY_INIT");
         delayedInbox = _delayedInbox;
-        sequencer = _sequencer;
+        newSequencerMap[_sequencer] = true;
         rollup = _rollup;
     }
 
-    function setSequencer(address newSequencer) external override {
+    // DEPRECATED - use isSequencer instead
+    function sequencer() external view returns (address) {
+        return deprecatedSequencer;
+    }
+
+    function isSequencer(address addr) public view returns (bool) {
+        return newSequencerMap[addr] || addr == deprecatedSequencer;
+    }
+
+    function setDeprecatedSequencer(address newSequencer) external override {
         require(msg.sender == rollup, "ONLY_ROLLUP");
-        sequencer = newSequencer;
+        deprecatedSequencer = newSequencer;
         emit SequencerAddressUpdated(newSequencer);
+    }
+
+    function setIsSequencer(address addr, bool newIsSequencer) external override {
+        require(msg.sender == rollup, "ONLY_ROLLUP");
+        newSequencerMap[addr] = newIsSequencer;
+        if (addr == deprecatedSequencer && !newIsSequencer) {
+            deprecatedSequencer = address(0);
+            emit SequencerAddressUpdated(address(0));
+        }
+        emit IsSequencerUpdated(addr, newIsSequencer);
     }
 
     function maxDelayBlocks() public view override returns (uint256) {
@@ -84,16 +104,15 @@ contract SequencerInbox is ISequencerInbox, Cloneable {
     ) external {
         require(_totalDelayedMessagesRead > totalDelayedMessagesRead, "DELAYED_BACKWARDS");
         {
-            bytes32 messageHash =
-                Messages.messageHash(
-                    kind,
-                    sender,
-                    l1BlockAndTimestamp[0],
-                    l1BlockAndTimestamp[1],
-                    inboxSeqNum,
-                    gasPriceL1,
-                    messageDataHash
-                );
+            bytes32 messageHash = Messages.messageHash(
+                kind,
+                sender,
+                l1BlockAndTimestamp[0],
+                l1BlockAndTimestamp[1],
+                inboxSeqNum,
+                gasPriceL1,
+                messageDataHash
+            );
             require(l1BlockAndTimestamp[0] + maxDelayBlocks() < block.number, "MAX_DELAY_BLOCKS");
             require(l1BlockAndTimestamp[1] + maxDelaySeconds() < block.timestamp, "MAX_DELAY_TIME");
 
@@ -114,15 +133,14 @@ contract SequencerInbox is ISequencerInbox, Cloneable {
             beforeAcc = inboxAccs[inboxAccs.length - 1];
         }
 
-        (bytes32 acc, uint256 count) =
-            includeDelayedMessages(
-                beforeAcc,
-                startNum,
-                _totalDelayedMessagesRead,
-                block.number,
-                block.timestamp,
-                delayedAcc
-            );
+        (bytes32 acc, uint256 count) = includeDelayedMessages(
+            beforeAcc,
+            startNum,
+            _totalDelayedMessagesRead,
+            block.number,
+            block.timestamp,
+            delayedAcc
+        );
         inboxAccs.push(acc);
         messageCount = count;
         emit DelayedInboxForced(
@@ -144,8 +162,12 @@ contract SequencerInbox is ISequencerInbox, Cloneable {
         // solhint-disable-next-line avoid-tx-origin
         require(msg.sender == tx.origin, "origin only");
         uint256 startNum = messageCount;
-        bytes32 beforeAcc =
-            addSequencerL2BatchImpl(transactions, lengths, sectionsMetadata, afterAcc);
+        bytes32 beforeAcc = addSequencerL2BatchImpl(
+            transactions,
+            lengths,
+            sectionsMetadata,
+            afterAcc
+        );
         emit SequencerBatchDeliveredFromOrigin(
             startNum,
             beforeAcc,
@@ -162,8 +184,12 @@ contract SequencerInbox is ISequencerInbox, Cloneable {
         bytes32 afterAcc
     ) external {
         uint256 startNum = messageCount;
-        bytes32 beforeAcc =
-            addSequencerL2BatchImpl(transactions, lengths, sectionsMetadata, afterAcc);
+        bytes32 beforeAcc = addSequencerL2BatchImpl(
+            transactions,
+            lengths,
+            sectionsMetadata,
+            afterAcc
+        );
         emit SequencerBatchDelivered(
             startNum,
             beforeAcc,
@@ -183,7 +209,7 @@ contract SequencerInbox is ISequencerInbox, Cloneable {
         uint256[] calldata sectionsMetadata,
         bytes32 afterAcc
     ) private returns (bytes32 beforeAcc) {
-        require(msg.sender == sequencer, "ONLY_SEQUENCER");
+        require(isSequencer(msg.sender), "ONLY_SEQUENCER");
 
         if (inboxAccs.length > 0) {
             beforeAcc = inboxAccs[inboxAccs.length - 1];
@@ -211,14 +237,9 @@ contract SequencerInbox is ISequencerInbox, Cloneable {
             }
 
             {
-                bytes32 prefixHash =
-                    keccak256(
-                        abi.encodePacked(
-                            msg.sender,
-                            sectionsMetadata[i + 1],
-                            sectionsMetadata[i + 2]
-                        )
-                    );
+                bytes32 prefixHash = keccak256(
+                    abi.encodePacked(msg.sender, sectionsMetadata[i + 1], sectionsMetadata[i + 2])
+                );
                 uint256 numItems = sectionsMetadata[i];
                 (runningAcc, runningCount, dataOffset) = calcL2Batch(
                     dataOffset,
