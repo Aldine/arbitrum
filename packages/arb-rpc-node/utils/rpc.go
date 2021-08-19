@@ -25,27 +25,37 @@ import (
 
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
+
+	"github.com/offchainlabs/arbitrum/packages/arb-util/configuration"
 )
 
 var logger = log.With().Caller().Stack().Str("component", "rpc").Logger()
 
-func LaunchRPC(ctx context.Context, handler http.Handler, addr, port, path string) error {
-	r := mux.NewRouter()
+func addRPC(r *mux.Router, handler http.Handler, path string) {
 	r.Handle(path, handler).Methods("GET", "POST", "OPTIONS")
-	return launchServer(ctx, r, addr, port, "rpc")
 }
 
-func LaunchWS(ctx context.Context, server *rpc.Server, addr, port, path string) error {
-	r := mux.NewRouter()
+func addWS(r *mux.Router, server *rpc.Server, path string) {
 	r.Handle(path, server.WebsocketHandler([]string{"*"}))
-	return launchServer(ctx, r, addr, port, "websocket")
+}
+
+func LaunchRPC(ctx context.Context, handler http.Handler, endpoint configuration.Endpoint) error {
+	r := mux.NewRouter()
+	addRPC(r, handler, endpoint.Path)
+	return launchServer(ctx, r, endpoint.Addr, endpoint.Port, "rpc")
+}
+
+func LaunchWS(ctx context.Context, server *rpc.Server, endpoint configuration.Endpoint) error {
+	r := mux.NewRouter()
+	addWS(r, server, endpoint.Path)
+	return launchServer(ctx, r, endpoint.Addr, endpoint.Port, "websocket")
 }
 
 func LaunchRPCAndWS(ctx context.Context, server *rpc.Server, addr, port, rpcPath, wsPath string) error {
 	r := mux.NewRouter()
-	r.Handle(rpcPath, server).Methods("GET", "POST", "OPTIONS")
-	r.Handle(wsPath, server.WebsocketHandler([]string{"*"}))
-	return launchServer(ctx, r, addr, port, "websocket")
+	addRPC(r, server, rpcPath)
+	addWS(r, server, wsPath)
+	return launchServer(ctx, r, addr, port, "rpc and websocket")
 }
 
 func launchServer(ctx context.Context, handler http.Handler, addr string, port string, serverType string) error {

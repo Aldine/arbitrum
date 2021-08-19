@@ -1,3 +1,19 @@
+/*
+ * Copyright 2021, Offchain Labs, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package configuration
 
 import (
@@ -12,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/knadh/koanf"
 	"github.com/knadh/koanf/parsers/json"
 	"github.com/knadh/koanf/providers/confmap"
@@ -24,8 +41,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	flag "github.com/spf13/pflag"
-
-	"github.com/offchainlabs/arbitrum/packages/arb-util/ethutils"
 )
 
 var logger = log.With().Caller().Stack().Str("component", "configuration").Logger()
@@ -38,6 +53,40 @@ type Conf struct {
 	String    string `koanf:"string"`
 }
 
+func addConfOptions(f *flag.FlagSet, prefix string) {
+	f.Bool(prefix+"dump", false, "print out currently active configuration file")
+	f.String(prefix+"env-prefix", "", "environment variables with given prefix will be loaded as configuration values")
+	f.String(prefix+"file", "", "name of configuration file")
+	addS3Options(f, prefix+"s3.")
+	f.String(prefix+"string", "", "configuration as JSON string")
+}
+
+type S3 struct {
+	AccessKey string `koanf:"access-key"`
+	Bucket    string `koanf:"bucket"`
+	ObjectKey string `koanf:"object-key"`
+	Region    string `koanf:"region"`
+	SecretKey string `koanf:"secret-key"`
+}
+
+func addS3Options(f *flag.FlagSet, prefix string) {
+	f.String(prefix+"access-key", "", "S3 access key")
+	f.String(prefix+"secret-key", "", "S3 secret key")
+	f.String(prefix+"region", "", "S3 region")
+	f.String(prefix+"bucket", "", "S3 bucket")
+	f.String(prefix+"object-key", "", "S3 object key")
+}
+
+func loadS3Variables(k *koanf.Koanf, prefix string) error {
+	return k.Load(s3.Provider(s3.Config{
+		AccessKey: k.String(prefix + "access-key"),
+		SecretKey: k.String(prefix + "secret-key"),
+		Region:    k.String(prefix + "region"),
+		Bucket:    k.String(prefix + "bucket"),
+		ObjectKey: k.String(prefix + "object-key"),
+	}), nil)
+}
+
 type Core struct {
 	Cache                  CoreCache     `koanf:"cache"`
 	CheckpointLoadGasCost  int           `koanf:"checkpoint-load-gas-cost"`
@@ -46,6 +95,11 @@ type Core struct {
 	MessageProcessCount    int           `koanf:"message-process-count"`
 	SaveRocksdbInterval    time.Duration `koanf:"save-rocksdb-interval"`
 	SaveRocksdbPath        string        `koanf:"save-rocksdb-path"`
+}
+
+func addCoreOptions(f *flag.FlagSet, prefix string) {
+	f.Duration(prefix+"save-rocksdb-interval", 0, "duration between saving database backups, 0 to disable")
+	f.String(prefix+"save-rocksdb-path", "db_checkpoints", "path to save database backups in")
 }
 
 type CoreCache struct {
@@ -66,9 +120,26 @@ func DefaultCoreSettings() *Core {
 	}
 }
 
+type Endpoint struct {
+	Addr string `koanf:"addr"`
+	Port string `koanf:"port"`
+	Path string `koanf:"path"`
+}
+
+func addEndpointOptions(f *flag.FlagSet, commandPrefix, helpPrefix string, defaultAddr, defaultPort string) {
+	f.String(commandPrefix+"addr", defaultAddr, helpPrefix+" address")
+	f.String(commandPrefix+"port", defaultPort, helpPrefix+" port")
+	f.String(commandPrefix+"path", "/", helpPrefix+" path")
+}
+
 type FeedInput struct {
 	Timeout time.Duration `koanf:"timeout"`
 	URLs    []string      `koanf:"url"`
+}
+
+func addFeedInputOptions(f *flag.FlagSet, prefix string) {
+	f.Duration(prefix+"timeout", 20*time.Second, "duration to wait before timing out connection to server")
+	f.StringSlice(prefix+"url", []string{}, "URL of sequencer feed source")
 }
 
 type FeedOutput struct {
@@ -81,18 +152,61 @@ type FeedOutput struct {
 	Workers       int           `koanf:"workers"`
 }
 
+func addFeedOutputOptions(f *flag.FlagSet, k *koanf.Koanf, prefix string) error {
+	f.String(prefix+"addr", "0.0.0.0", "address to bind the relay feed output to")
+	f.Duration(prefix+"io-timeout", 5*time.Second, "duration to wait before timing out HTTP to WS upgrade")
+	f.Int(prefix+"port", 9642, "port to bind the relay feed output to")
+	f.Duration(prefix+"ping", 5*time.Second, "duration for ping interval")
+	f.Duration(prefix+"client-timeout", 15*time.Second, "duraction to wait before timing out connections to client")
+	f.Int(prefix+"workers", 100, "Number of threads to reserve for HTTP to WS upgrade")
+
+	return k.Load(confmap.Provider(map[string]interface{}{
+		prefix + "queue": 100,
+	}, "."), nil)
+}
+
 type Feed struct {
 	Input  FeedInput  `koanf:"input"`
 	Output FeedOutput `koanf:"output"`
 }
 
 type Healthcheck struct {
-	Addr      string `koanf:"addr"`
-	Enable    bool   `koanf:"enable"`
-	L1Node    bool   `koanf:"l1-node"`
-	Metrics   bool   `koanf:"metrics"`
-	Port      string `koanf:"port"`
-	Sequencer bool   `koanf:"sequencer"`
+	Enable   bool     `koanf:"enable"`
+	Endpoint Endpoint `koanf:"endpoint"`
+
+	MaxInboxSyncDiff         int64  `koanf:"max-inbox-sync-diff"`
+	MaxMessagesSyncDiff      int64  `koanf:"max-messages-sync-diff"`
+	MaxLogsProcessedSyncDiff int64  `koanf:"max-logs-processed-sync-diff"`
+	MaxL1BlockDiff           int64  `koanf:"max-l1-block-diff"`
+	MaxL2BlockDiff           int64  `koanf:"max-l2-block-diff"`
+	ForwarderReadyURL        string `koanf:"forwarder-ready-url"`
+}
+
+func addHealthcheckOptions(f *flag.FlagSet, k *koanf.Koanf, prefix string) error {
+	f.Bool(prefix+"enable", false, "enable healthcheck endpoint")
+	addEndpointOptions(f, prefix+"endpoint.", "healthcheck", "127.0.0.1", "8080")
+
+	f.String(prefix+"forwarder-ready-url", "", "address to use for forwarder target healthcheck")
+
+	return k.Load(confmap.Provider(map[string]interface{}{
+		prefix + "max-inbox-sync-diff":          100,
+		prefix + "max-messages-sync-diff":       100,
+		prefix + "max-logs-processed-sync-diff": 100,
+		prefix + "max-l1-block-diff":            10,
+		prefix + "max-l2-block-diff":            100,
+	}, "."), nil)
+}
+
+type MetricsServer struct {
+	Enable   bool     `koanf:"enable"`
+	Prefix   string   `koanf:"prefix"`
+	Endpoint Endpoint `koanf:"endpoint"`
+}
+
+func addMetricsServerOptions(f *flag.FlagSet, prefix string) {
+	f.Bool(prefix+"enable", false, "enable metrics server")
+	f.String(prefix+"prefix", "", "prefix for arbitrum metrics")
+	addEndpointOptions(f, prefix+"endpoint.", "metrics server", "127.0.0.1", "6070")
 }
 
 type Lockout struct {
@@ -103,24 +217,27 @@ type Lockout struct {
 	SeqNumTimeout time.Duration `koanf:"seq-num-timeout"`
 }
 
+func addLockoutOptions(f *flag.FlagSet, k *koanf.Koanf, prefix string) error {
+	f.String(prefix+"redis", "", "sequencer lockout redis instance URL")
+	f.String(prefix+"self-rpc-url", "", "own RPC URL for other sequencers to failover to")
+
+	return k.Load(confmap.Provider(map[string]interface{}{
+		prefix + "timeout":         30 * time.Second,
+		prefix + "max-latency":     10 * time.Second,
+		prefix + "seq-num-timeout": 5 * time.Minute,
+	}, "."), nil)
+}
+
 type Aggregator struct {
 	InboxAddress string `koanf:"inbox-address"`
 	MaxBatchTime int64  `koanf:"max-batch-time"`
 	Stateful     bool   `koanf:"stateful"`
 }
 
-type RPC struct {
-	Addr string `koanf:"addr"`
-	Port string `koanf:"port"`
-	Path string `koanf:"path"`
-}
-
-type S3 struct {
-	AccessKey string `koanf:"access-key"`
-	Bucket    string `koanf:"bucket"`
-	ObjectKey string `koanf:"object-key"`
-	Region    string `koanf:"region"`
-	SecretKey string `koanf:"secret-key"`
+func addAggregatorOptions(f *flag.FlagSet, prefix string) {
+	f.String(prefix+"inbox-address", "", "address of the inbox contract")
+	f.Int(prefix+"max-batch-time", 10, "max-batch-time=NumSeconds")
+	f.Bool(prefix+"stateful", false, "enable pending state tracking")
 }
 
 type Sequencer struct {
@@ -131,10 +248,12 @@ type Sequencer struct {
 	Lockout                           Lockout `koanf:"lockout"`
 }
 
-type WS struct {
-	Addr string `koanf:"addr"`
-	Port string `koanf:"port"`
-	Path string `koanf:"path"`
+func addSequencerOptions(f *flag.FlagSet, k *koanf.Koanf, prefix string) error {
+	f.Int64(prefix+"create-batch-block-interval", 270, "block interval at which to create new batches")
+	f.Int64(prefix+"continue-batch-posting-block-interval", 2, "block interval to post the next batch after posting a partial one")
+	f.Int64(prefix+"delayed-messages-target-delay", 12, "delay before sequencing delayed messages")
+	f.Bool(prefix+"reorg-out-huge-messages", false, "erase any huge messages in database that cannot be published (DANGEROUS)")
+	return addLockoutOptions(f, k, prefix+"lockout.")
 }
 
 type Forwarder struct {
@@ -142,19 +261,42 @@ type Forwarder struct {
 	Submitter string `koanf:"submitter-address"`
 }
 
+func addForwarderOptions(f *flag.FlagSet, prefix string) {
+	f.String(prefix+"target", "", "url of another node to send transactions through")
+	f.String(prefix+"submitter-address", "", "address of the node that will submit your transaction to the chain")
+}
+
 type Node struct {
 	Aggregator Aggregator `koanf:"aggregator"`
 	ChainID    uint64     `koanf:"chain-id"`
 	Forwarder  Forwarder  `koanf:"forwarder"`
-	RPC        RPC        `koanf:"rpc"`
+	RPC        Endpoint   `koanf:"rpc"`
 	Sequencer  Sequencer  `koanf:"sequencer"`
 	Type       string     `koanf:"type"`
-	WS         WS         `koanf:"ws"`
+	WS         Endpoint   `koanf:"ws"`
+}
+
+func addNodeOptions(f *flag.FlagSet, k *koanf.Koanf, prefix string) error {
+	addAggregatorOptions(f, prefix+"aggregator.")
+	addForwarderOptions(f, prefix+"forwarder.")
+	addEndpointOptions(f, prefix+"rpc.", "RPC", "0.0.0.0", "8547")
+	addEndpointOptions(f, prefix+"ws.", "websocket", "0.0.0.0", "8548")
+	if err := addSequencerOptions(f, k, prefix+"sequencer."); err != nil {
+		return err
+	}
+	f.String(prefix+"type", "forwarder", "forwarder, aggregator or sequencer")
+	f.Uint64(prefix+"chain-id", 42161, "chain id of the arbitrum chain")
+	return nil
 }
 
 type Persistent struct {
 	Chain        string `koanf:"chain"`
 	GlobalConfig string `koanf:"global-config"`
+}
+
+func addPersistentOptions(f *flag.FlagSet, prefix string) {
+	f.String(prefix+"global-config", ".arbitrum", "location global configuration is located")
+	f.String(prefix+"chain", "", "path that chain specific state is located")
 }
 
 type Rollup struct {
@@ -166,10 +308,21 @@ type Rollup struct {
 	} `koanf:"machine"`
 }
 
+func addRollupOptions(f *flag.FlagSet, prefix string) {
+	f.String(prefix+"address", "", "layer 2 rollup contract address")
+	f.String(prefix+"machine.filename", "", "file to load machine from")
+}
+
 type Validator struct {
 	Strategy             string `koanf:"strategy"`
 	UtilsAddress         string `koanf:"utils-address"`
 	WalletFactoryAddress string `koanf:"wallet-factory-address"`
+}
+
+func addValidatorOptions(f *flag.FlagSet, prefix string) {
+	f.String(prefix+"strategy", "StakeLatest", "strategy for validator to use")
+	f.String(prefix+"utils-address", "", "strategy for validator to use")
+	f.String(prefix+"wallet-factory-address", "", "strategy for validator to use")
 }
 
 type Wallet struct {
@@ -181,10 +334,9 @@ type Log struct {
 	Core string `koanf:"core"`
 }
 
-type Metrics struct {
-	Addr   string `koanf:"addr"`
-	Port   string `koanf:"port"`
-	Prefix string `koanf:"prefix"`
+func addLogOptions(f *flag.FlagSet, prefix string) {
+	f.String(prefix+"rpc", "info", "log level for rpc")
+	f.String(prefix+"core", "info", "log level for general arb node logging")
 }
 
 type Config struct {
@@ -207,8 +359,8 @@ type Config struct {
 	Wallet        Wallet     `koanf:"wallet"`
 
 	// The following field needs to be top level for compatibility with the underlying go-ethereum lib
-	Metrics       bool    `koanf:"metrics"`
-	MetricsServer Metrics `koanf:"metrics-server"`
+	Metrics       bool          `koanf:"metrics"`
+	MetricsServer MetricsServer `koanf:"metrics-server"`
 }
 
 func (c *Config) GetNodeDatabasePath() string {
@@ -220,67 +372,48 @@ func (c *Config) GetValidatorDatabasePath() string {
 }
 
 func ParseNode(ctx context.Context) (*Config, *Wallet, string, *big.Int, error) {
+	k := koanf.New(".")
 	f := flag.NewFlagSet("", flag.ContinueOnError)
 
-	AddFeedOutputOptions(f)
-
-	f.String("node.aggregator.inbox-address", "", "address of the inbox contract")
-	f.Int("node.aggregator.max-batch-time", 10, "max-batch-time=NumSeconds")
-	f.Bool("node.aggregator.stateful", false, "enable pending state tracking")
-	f.String("node.forwarder.target", "", "url of another node to send transactions through")
-	f.String("node.forwarder.submitter-address", "", "address of the node that will submit your transaction to the chain")
-	f.String("node.rpc.addr", "0.0.0.0", "RPC address")
-	f.Int("node.rpc.port", 8547, "RPC port")
-	f.String("node.rpc.path", "/", "RPC path")
-	f.Int64("node.sequencer.create-batch-block-interval", 270, "block interval at which to create new batches")
-	f.Int64("node.sequencer.continue-batch-posting-block-interval", 2, "block interval to post the next batch after posting a partial one")
-	f.Int64("node.sequencer.delayed-messages-target-delay", 12, "delay before sequencing delayed messages")
-	f.Bool("node.sequencer.reorg-out-huge-messages", false, "erase any huge messages in database that cannot be published (DANGEROUS)")
-	f.String("node.sequencer.lockout.redis", "", "sequencer lockout redis instance URL")
-	f.String("node.sequencer.lockout.self-rpc-url", "", "own RPC URL for other sequencers to failover to")
-	f.String("node.type", "forwarder", "forwarder, aggregator or sequencer")
-	f.String("node.ws.addr", "0.0.0.0", "websocket address")
-	f.Int("node.ws.port", 8548, "websocket port")
-	f.String("node.ws.path", "/", "websocket path")
-	return parseNonRelay(ctx, f)
+	if err := addFeedOutputOptions(f, k, "feed.output."); err != nil {
+		return nil, nil, "", nil, err
+	}
+	if err := addNodeOptions(f, k, "node."); err != nil {
+		return nil, nil, "", nil, err
+	}
+	return parseNonRelay(ctx, f, k)
 }
 
 func ParseValidator(ctx context.Context) (*Config, *Wallet, string, *big.Int, error) {
+	k := koanf.New(".")
 	f := flag.NewFlagSet("", flag.ContinueOnError)
 
-	AddFeedOutputOptions(f)
+	if err := addFeedOutputOptions(f, k, "feed.output."); err != nil {
+		return nil, nil, "", nil, err
+	}
+	addValidatorOptions(f, "validator.")
 
-	f.String("validator.strategy", "StakeLatest", "strategy for validator to use")
-	f.String("validator.utils-address", "", "strategy for validator to use")
-	f.String("validator.wallet-factory-address", "", "strategy for validator to use")
-
-	return parseNonRelay(ctx, f)
+	return parseNonRelay(ctx, f, k)
 }
 
-func parseNonRelay(ctx context.Context, f *flag.FlagSet) (*Config, *Wallet, string, *big.Int, error) {
-	f.Duration("core.save-rocksdb-interval", 0, "duration between saving database backups, 0 to disable")
-	f.String("core.save-rocksdb-path", "db_checkpoints", "path to save database backups in")
+func parseNonRelay(ctx context.Context, f *flag.FlagSet, k *koanf.Koanf) (*Config, *Wallet, string, *big.Int, error) {
+	addCoreOptions(f, "core.")
 
 	f.String("bridge-utils-address", "", "bridgeutils contract address")
 
 	f.Float64("gas-price", 0, "float of gas price to use in gwei (0 = use L1 node's recommended value)")
 
-	f.Uint64("node.chain-id", 42161, "chain id of the arbitrum chain")
-
-	f.String("rollup.address", "", "layer 2 rollup contract address")
-	f.String("rollup.machine.filename", "", "file to load machine from")
+	addRollupOptions(f, "rollup.")
 
 	f.String("l1.url", "", "layer 1 ethereum node RPC URL")
 
-	f.String("persistent.global-config", ".arbitrum", "location global configuration is located")
-	f.String("persistent.chain", "", "path that chain specific state is located")
+	addPersistentOptions(f, "persistent.")
 
 	f.Bool("wait-to-catch-up", false, "wait to catch up to the chain before opening the RPC")
 
 	f.String("wallet.password", "", "password for wallet")
 
-	k, err := beginCommonParse(f)
-	if err != nil {
+	if err := beginCommonParse(f, k); err != nil {
 		return nil, nil, "", nil, err
 	}
 
@@ -289,7 +422,7 @@ func parseNonRelay(ctx context.Context, f *flag.FlagSet) (*Config, *Wallet, stri
 		return nil, nil, "", nil, errors.New("required parameter --l1.url is missing")
 	}
 
-	l1Client, err := ethutils.NewRPCEthClient(l1URL)
+	l1Client, err := ethclient.Dial(l1URL)
 	if err != nil {
 		return nil, nil, "", nil, errors.Wrapf(err, "error connecting to ethereum L1 node: %s", l1URL)
 	}
@@ -431,12 +564,13 @@ func parseNonRelay(ctx context.Context, f *flag.FlagSet) (*Config, *Wallet, stri
 }
 
 func ParseRelay() (*Config, error) {
+	k := koanf.New(".")
 	f := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 
-	AddFeedOutputOptions(f)
-
-	k, err := beginCommonParse(f)
-	if err != nil {
+	if err := addFeedOutputOptions(f, k, "feed.output."); err != nil {
+		return nil, err
+	}
+	if err := beginCommonParse(f, k); err != nil {
 		return nil, err
 	}
 
@@ -448,74 +582,29 @@ func ParseRelay() (*Config, error) {
 	return out, nil
 }
 
-func AddFeedOutputOptions(f *flag.FlagSet) {
-	f.String("feed.output.addr", "0.0.0.0", "address to bind the relay feed output to")
-	f.Duration("feed.output.io-timeout", 5*time.Second, "duration to wait before timing out HTTP to WS upgrade")
-	f.Int("feed.output.port", 9642, "port to bind the relay feed output to")
-	f.Duration("feed.output.ping", 5*time.Second, "duration for ping interval")
-	f.Duration("feed.output.client-timeout", 15*time.Second, "duraction to wait before timing out connections to client")
-	f.Int("feed.output.workers", 100, "Number of threads to reserve for HTTP to WS upgrade")
-}
-
-func beginCommonParse(f *flag.FlagSet) (*koanf.Koanf, error) {
-	f.Bool("conf.dump", false, "print out currently active configuration file")
-	f.String("conf.env-prefix", "", "environment variables with given prefix will be loaded as configuration values")
-	f.String("conf.file", "", "name of configuration file")
-	f.String("conf.s3.access-key", "", "S3 access key")
-	f.String("conf.s3.secret-key", "", "S3 secret key")
-	f.String("conf.s3.region", "", "S3 region")
-	f.String("conf.s3.bucket", "", "S3 bucket")
-	f.String("conf.s3.object-key", "", "S3 object key")
-	f.String("conf.string", "", "configuration as JSON string")
-
-	f.Duration("feed.input.timeout", 20*time.Second, "duration to wait before timing out connection to server")
-	f.StringSlice("feed.input.url", []string{}, "URL of sequencer feed source")
-
-	f.Bool("healthcheck.enable", false, "enable healthcheck endpoint")
-	f.Bool("healthcheck.sequencer", false, "enable checking the health of the sequencer")
-	f.Bool("healthcheck.l1-node", false, "enable checking the health of the L1 node")
-	f.Bool("healthcheck.metrics", false, "serve healthcheck statistics over metrics interface")
-	f.String("healthcheck.addr", "", "address to bind the healthcheck endpoint to")
-	f.Int("healthcheck.port", 0, "port to bind the healthcheck endpoint to")
-
-	f.Bool("metrics", false, "enable metrics")
-	f.String("metrics-server.addr", "127.0.0.1", "metrics server address")
-	f.String("metrics-server.port", "6070", "metrics server address")
-	f.String("metrics-server.prefix", "", "prepend the specified prefix to the exported metrics names")
-	f.String("log.rpc", "info", "log level for rpc")
-	f.String("log.core", "info", "log level for general arb node logging")
-
+func beginCommonParse(f *flag.FlagSet, k *koanf.Koanf) error {
+	addConfOptions(f, "conf.")
+	addFeedInputOptions(f, "feed.input.")
+	if err := addHealthcheckOptions(f, k, "healthcheck."); err != nil {
+		return err
+	}
+	f.Bool("metrics", false, "enable metrics tracking")
+	addMetricsServerOptions(f, "metrics-server.")
+	addLogOptions(f, "log.")
 	f.Bool("pprof-enable", false, "enable profiling server")
 
 	err := f.Parse(os.Args[1:])
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if f.NArg() != 0 {
 		// Unexpected number of parameters
-		return nil, errors.New("unexpected number of parameters")
-	}
-
-	var k = koanf.New(".")
-
-	// Load defaults that are not specified on command line
-	err = k.Load(confmap.Provider(map[string]interface{}{
-		"feed.output.queue":                      100,
-		"node.sequencer.lockout.timeout":         30 * time.Second,
-		"node.sequencer.lockout.max-latency":     10 * time.Second,
-		"node.sequencer.lockout.seq-num-timeout": 5 * time.Minute,
-	}, "."), nil)
-	if err != nil {
-		return nil, errors.Wrap(err, "error applying default values")
+		return errors.New("unexpected number of parameters")
 	}
 
 	// Initial application of command line parameters and environment variables so other methods can be applied
-	if err := applyOverrides(f, k); err != nil {
-		return nil, err
-	}
-
-	return k, nil
+	return applyOverrides(f, k)
 }
 
 func applyOverrides(f *flag.FlagSet, k *koanf.Koanf) error {
@@ -526,7 +615,7 @@ func applyOverrides(f *flag.FlagSet, k *koanf.Koanf) error {
 
 	// Load configuration file from S3 if setup
 	if len(k.String("conf.s3.secret-key")) != 0 {
-		if err := loadS3Variables(k); err != nil {
+		if err := loadS3Variables(k, "config.s3."); err != nil {
 			return errors.Wrap(err, "error loading S3 settings")
 		}
 
@@ -590,16 +679,6 @@ func loadEnvironmentVariables(k *koanf.Koanf) error {
 	}
 
 	return nil
-}
-
-func loadS3Variables(k *koanf.Koanf) error {
-	return k.Load(s3.Provider(s3.Config{
-		AccessKey: k.String("conf.s3.access-key"),
-		SecretKey: k.String("conf.s3.secret-key"),
-		Region:    k.String("conf.s3.region"),
-		Bucket:    k.String("conf.s3.bucket"),
-		ObjectKey: k.String("conf.s3.object-key"),
-	}), nil)
 }
 
 func endCommonParse(k *koanf.Koanf) (*Config, *Wallet, error) {

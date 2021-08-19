@@ -147,7 +147,7 @@ func SetupBatcher(
 	}
 }
 
-func LaunchPublicServer(ctx context.Context, web3Server *rpc.Server, rpc configuration.RPC, ws configuration.WS) error {
+func LaunchPublicServer(ctx context.Context, web3Server *rpc.Server, rpc configuration.Endpoint, ws configuration.Endpoint) error {
 	if rpc.Port == ws.Port && rpc.Port != "" {
 		if rpc.Addr != ws.Addr {
 			return errors.New("if serving on same port, rpc and ws addreses must be the same")
@@ -161,12 +161,12 @@ func LaunchPublicServer(ctx context.Context, web3Server *rpc.Server, rpc configu
 	errChan := make(chan error, 1)
 	if rpc.Port != "" {
 		go func() {
-			errChan <- utils2.LaunchRPC(ctx, web3Server, rpc.Addr, rpc.Port, rpc.Path)
+			errChan <- utils2.LaunchRPC(ctx, web3Server, rpc)
 		}()
 	}
 	if ws.Port != "" {
 		go func() {
-			errChan <- utils2.LaunchWS(ctx, web3Server, ws.Addr, ws.Port, ws.Path)
+			errChan <- utils2.LaunchWS(ctx, web3Server, ws)
 		}()
 	}
 	return <-errChan
