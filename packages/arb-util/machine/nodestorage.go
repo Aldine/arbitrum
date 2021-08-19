@@ -17,9 +17,11 @@
 package machine
 
 import (
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
 	"math/big"
+
+	"github.com/ethereum/go-ethereum/core/types"
+
+	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
 )
 
 type BlockInfo struct {

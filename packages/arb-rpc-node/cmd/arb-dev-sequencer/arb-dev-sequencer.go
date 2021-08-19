@@ -221,7 +221,7 @@ func startup() error {
 	}()
 
 	coreConfig := configuration.DefaultCoreSettings()
-	mon, err := monitor.NewMonitor(dbPath, arbosPath, coreConfig)
+	mon, err := monitor.NewStartedMonitor(dbPath, arbosPath, coreConfig)
 	if err != nil {
 		return errors.Wrap(err, "error opening monitor")
 	}
@@ -230,7 +230,7 @@ func startup() error {
 	dummySequencerFeed := make(chan broadcaster.BroadcastFeedMessage)
 	var inboxReader *monitor.InboxReader
 	for {
-		inboxReader, err = mon.StartInboxReader(ctx, ethclint, rollupAddress, 0, bridgeUtilsAddress, nil, dummySequencerFeed)
+		inboxReader, err = mon.StartInboxReader(ctx, ethclint, rollupAddress, 0, bridgeUtilsAddress, dummySequencerFeed)
 		if err == nil {
 			break
 		}
