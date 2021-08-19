@@ -259,11 +259,13 @@ func addSequencerOptions(f *flag.FlagSet, k *koanf.Koanf, prefix string) error {
 type Forwarder struct {
 	Target    string `koanf:"target"`
 	Submitter string `koanf:"submitter-address"`
+	RpcMode   string `koanf:"rpc-mode"`
 }
 
 func addForwarderOptions(f *flag.FlagSet, prefix string) {
 	f.String(prefix+"target", "", "url of another node to send transactions through")
 	f.String(prefix+"submitter-address", "", "address of the node that will submit your transaction to the chain")
+	f.String("rpc-mode", "full", "RPC mode: either full, non-mutating (no eth_sendRawTransaction), or forwarding-only (only requests forwarded upstream are permitted)")
 }
 
 type Node struct {
