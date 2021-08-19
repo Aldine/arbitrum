@@ -3,6 +3,7 @@ module github.com/offchainlabs/arbitrum/packages/arb-node-core
 go 1.13
 
 require (
+	github.com/AppsFlyer/go-sundheit v0.5.0
 	github.com/ethereum/go-ethereum v1.10.4
 	github.com/kr/pretty v0.2.0 // indirect
 	github.com/mattn/go-colorable v0.1.4 // indirect

@@ -45,6 +45,7 @@ import (
 	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/configuration"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/ethutils"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/healthcheck"
 )
 
 var logger zerolog.Logger
@@ -109,8 +110,14 @@ func startup() error {
 
 	metricsConfig := arbmetrics.NewMetricsConfig(config.MetricsServer)
 
+	health, err := healthcheck.NewNodeHealth(config.Healthcheck, metricsConfig.Registry)
+	if err != nil {
+		return err
+	}
+
+	health.Launch()
+
 	rollupAddr := ethcommon.HexToAddress(config.Rollup.Address)
-	bridgeUtilsAddr := ethcommon.HexToAddress(config.BridgeUtilsAddress)
 	validatorUtilsAddr := ethcommon.HexToAddress(config.Validator.UtilsAddress)
 	validatorWalletFactoryAddr := ethcommon.HexToAddress(config.Validator.WalletFactoryAddress)
 	auth, _, err := cmdhelp.GetKeystore(config.Persistent.Chain, wallet, config.GasPrice, l1ChainId)
@@ -193,6 +200,10 @@ func startup() error {
 		return err
 	}
 
+	if err := mon.Metrics.RegisterSyncChecks(config.Healthcheck, health.Synced); err != nil {
+		return err
+	}
+
 	if err := mon.StartCore(config.Rollup.Machine.Filename); err != nil {
 		return err
 	}
@@ -207,9 +218,9 @@ func startup() error {
 		return errors.Wrap(err, "error setting up staker")
 	}
 
-	_, err = mon.StartInboxReader(ctx, l1Client, common.NewAddressFromEth(rollupAddr), config.Rollup.FromBlock, common.NewAddressFromEth(bridgeUtilsAddr), dummySequencerFeed)
+	_, err = mon.TryStartInboxReaderLoop(ctx, l1URL, dummySequencerFeed, config)
 	if err != nil {
-		return errors.Wrap(err, "failed to create inbox reader")
+		return err
 	}
 
 	logger.Info().Int("strategy", int(strategy)).Msg("Initialized validator")
