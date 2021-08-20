@@ -45,6 +45,11 @@ import (
 
 var logger = log.With().Caller().Stack().Str("component", "configuration").Logger()
 
+var (
+	arbitrumOneRollupAddress    = "0xC12BA48c781F6e392B49Db2E25Cd0c28cD77531A"
+	rinkebyTestnetRollupAddress = "0xFe2c86CF40F89Fe2F726cFBBACEBae631300b50c"
+)
+
 type Conf struct {
 	Dump      bool   `koanf:"dump"`
 	EnvPrefix string `koanf:"env-prefix"`
@@ -265,7 +270,7 @@ type Forwarder struct {
 func addForwarderOptions(f *flag.FlagSet, prefix string) {
 	f.String(prefix+"target", "", "url of another node to send transactions through")
 	f.String(prefix+"submitter-address", "", "address of the node that will submit your transaction to the chain")
-	f.String("rpc-mode", "full", "RPC mode: either full, non-mutating (no eth_sendRawTransaction), or forwarding-only (only requests forwarded upstream are permitted)")
+	f.String(prefix+"rpc-mode", "full", "RPC mode: either full, non-mutating (no eth_sendRawTransaction), or forwarding-only (only requests forwarded upstream are permitted)")
 }
 
 type Node struct {
@@ -373,7 +378,7 @@ func (c *Config) GetValidatorDatabasePath() string {
 	return path.Join(c.Persistent.Chain, "validator_db")
 }
 
-func ParseNode(ctx context.Context) (*Config, *Wallet, string, *big.Int, error) {
+func ParseNode(ctx context.Context, args []string) (*Config, *Wallet, string, *big.Int, error) {
 	k := koanf.New(".")
 	f := flag.NewFlagSet("", flag.ContinueOnError)
 
@@ -383,10 +388,10 @@ func ParseNode(ctx context.Context) (*Config, *Wallet, string, *big.Int, error) 
 	if err := addNodeOptions(f, k, "node."); err != nil {
 		return nil, nil, "", nil, err
 	}
-	return parseNonRelay(ctx, f, k)
+	return parseNonRelay(ctx, f, k, args)
 }
 
-func ParseValidator(ctx context.Context) (*Config, *Wallet, string, *big.Int, error) {
+func ParseValidator(ctx context.Context, args []string) (*Config, *Wallet, string, *big.Int, error) {
 	k := koanf.New(".")
 	f := flag.NewFlagSet("", flag.ContinueOnError)
 
@@ -395,10 +400,10 @@ func ParseValidator(ctx context.Context) (*Config, *Wallet, string, *big.Int, er
 	}
 	addValidatorOptions(f, "validator.")
 
-	return parseNonRelay(ctx, f, k)
+	return parseNonRelay(ctx, f, k, args)
 }
 
-func parseNonRelay(ctx context.Context, f *flag.FlagSet, k *koanf.Koanf) (*Config, *Wallet, string, *big.Int, error) {
+func parseNonRelay(ctx context.Context, f *flag.FlagSet, k *koanf.Koanf, args []string) (*Config, *Wallet, string, *big.Int, error) {
 	addCoreOptions(f, "core.")
 
 	f.String("bridge-utils-address", "", "bridgeutils contract address")
@@ -415,7 +420,7 @@ func parseNonRelay(ctx context.Context, f *flag.FlagSet, k *koanf.Koanf) (*Confi
 
 	f.String("wallet.password", "", "password for wallet")
 
-	if err := beginCommonParse(f, k); err != nil {
+	if err := beginCommonParse(f, k, args); err != nil {
 		return nil, nil, "", nil, err
 	}
 
@@ -457,7 +462,7 @@ func parseNonRelay(ctx context.Context, f *flag.FlagSet, k *koanf.Koanf) (*Confi
 				"node.chain-id":                    "42161",
 				"node.forwarder.target":            "https://arb1.arbitrum.io/rpc",
 				"persistent.chain":                 "mainnet",
-				"rollup.address":                   "0xC12BA48c781F6e392B49Db2E25Cd0c28cD77531A",
+				"rollup.address":                   arbitrumOneRollupAddress,
 				"rollup.from-block":                "12525700",
 				"rollup.machine.filename":          "mainnet.arb1.mexe",
 				"rollup.machine.url":               "https://raw.githubusercontent.com/OffchainLabs/arb-os/48bdb999a703575d26a856499e6eb3e17691e99d/arb_os/arbos.mexe",
@@ -476,7 +481,7 @@ func parseNonRelay(ctx context.Context, f *flag.FlagSet, k *koanf.Koanf) (*Confi
 				"node.chain-id":                    "421611",
 				"node.forwarder.target":            "https://rinkeby.arbitrum.io/rpc",
 				"persistent.chain":                 "rinkeby",
-				"rollup.address":                   "0xFe2c86CF40F89Fe2F726cFBBACEBae631300b50c",
+				"rollup.address":                   rinkebyTestnetRollupAddress,
 				"rollup.from-block":                "8700589",
 				"rollup.machine.filename":          "testnet.rinkeby.mexe",
 				"rollup.machine.url":               "https://raw.githubusercontent.com/OffchainLabs/arb-os/26ab8d7c818681c4ee40792aeb12981a8f2c3dfa/arb_os/arbos.mexe",
@@ -565,14 +570,14 @@ func parseNonRelay(ctx context.Context, f *flag.FlagSet, k *koanf.Koanf) (*Confi
 	return out, wallet, l1URL, l1ChainId, nil
 }
 
-func ParseRelay() (*Config, error) {
+func ParseRelay(args []string) (*Config, error) {
 	k := koanf.New(".")
 	f := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 
 	if err := addFeedOutputOptions(f, k, "feed.output."); err != nil {
 		return nil, err
 	}
-	if err := beginCommonParse(f, k); err != nil {
+	if err := beginCommonParse(f, k, args); err != nil {
 		return nil, err
 	}
 
@@ -584,7 +589,7 @@ func ParseRelay() (*Config, error) {
 	return out, nil
 }
 
-func beginCommonParse(f *flag.FlagSet, k *koanf.Koanf) error {
+func beginCommonParse(f *flag.FlagSet, k *koanf.Koanf, args []string) error {
 	addConfOptions(f, "conf.")
 	addFeedInputOptions(f, "feed.input.")
 	if err := addHealthcheckOptions(f, k, "healthcheck."); err != nil {
@@ -595,7 +600,7 @@ func beginCommonParse(f *flag.FlagSet, k *koanf.Koanf) error {
 	addLogOptions(f, "log.")
 	f.Bool("pprof-enable", false, "enable profiling server")
 
-	err := f.Parse(os.Args[1:])
+	err := f.Parse(args)
 	if err != nil {
 		return err
 	}
