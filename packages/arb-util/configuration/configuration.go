@@ -245,12 +245,23 @@ func addAggregatorOptions(f *flag.FlagSet, prefix string) {
 	f.Bool(prefix+"stateful", false, "enable pending state tracking")
 }
 
+type L1PostingStrategy struct {
+	HighGasThreshold   float64 `koanf:"high-gas-threshold"`
+	HighGasDelayBlocks int64   `koanf:"high-gas-delay-blocks"`
+}
+
+func addL1PostingStrategyOptions(f *flag.FlagSet, prefix string) {
+	f.Float64(prefix+"high-gas-threshold", 150, "gwei threshold at which to consider gas price high and delay batch posting")
+	f.Int64(prefix+"high-gas-delay-blocks", 270, "wait up to this many more blocks when gas costs are high")
+}
+
 type Sequencer struct {
-	CreateBatchBlockInterval          int64   `koanf:"create-batch-block-interval"`
-	ContinueBatchPostingBlockInterval int64   `koanf:"continue-batch-posting-block-interval"`
-	DelayedMessagesTargetDelay        int64   `koanf:"delayed-messages-target-delay"`
-	ReorgOutHugeMessages              bool    `koanf:"reorg-out-huge-messages"`
-	Lockout                           Lockout `koanf:"lockout"`
+	CreateBatchBlockInterval          int64             `koanf:"create-batch-block-interval"`
+	ContinueBatchPostingBlockInterval int64             `koanf:"continue-batch-posting-block-interval"`
+	DelayedMessagesTargetDelay        int64             `koanf:"delayed-messages-target-delay"`
+	ReorgOutHugeMessages              bool              `koanf:"reorg-out-huge-messages"`
+	Lockout                           Lockout           `koanf:"lockout"`
+	L1PostingStrategy                 L1PostingStrategy `koanf:"l1-posting-strategy"`
 }
 
 func addSequencerOptions(f *flag.FlagSet, k *koanf.Koanf, prefix string) error {
@@ -258,7 +269,11 @@ func addSequencerOptions(f *flag.FlagSet, k *koanf.Koanf, prefix string) error {
 	f.Int64(prefix+"continue-batch-posting-block-interval", 2, "block interval to post the next batch after posting a partial one")
 	f.Int64(prefix+"delayed-messages-target-delay", 12, "delay before sequencing delayed messages")
 	f.Bool(prefix+"reorg-out-huge-messages", false, "erase any huge messages in database that cannot be published (DANGEROUS)")
-	return addLockoutOptions(f, k, prefix+"lockout.")
+	if err := addLockoutOptions(f, k, prefix+"lockout."); err != nil {
+		return err
+	}
+	addL1PostingStrategyOptions(f, prefix+"l1-posting-strategy.")
+	return nil
 }
 
 type Forwarder struct {
@@ -275,6 +290,7 @@ func addForwarderOptions(f *flag.FlagSet, prefix string) {
 
 type Node struct {
 	Aggregator Aggregator `koanf:"aggregator"`
+	Cache      NodeCache  `koanf:"cache"`
 	ChainID    uint64     `koanf:"chain-id"`
 	Forwarder  Forwarder  `koanf:"forwarder"`
 	RPC        Endpoint   `koanf:"rpc"`
@@ -285,6 +301,7 @@ type Node struct {
 
 func addNodeOptions(f *flag.FlagSet, k *koanf.Koanf, prefix string) error {
 	addAggregatorOptions(f, prefix+"aggregator.")
+	addNodeCacheOptions(f, prefix+"cache.")
 	addForwarderOptions(f, prefix+"forwarder.")
 	addEndpointOptions(f, prefix+"rpc.", "RPC", "0.0.0.0", "8547")
 	addEndpointOptions(f, prefix+"ws.", "websocket", "0.0.0.0", "8548")
@@ -294,6 +311,19 @@ func addNodeOptions(f *flag.FlagSet, k *koanf.Koanf, prefix string) error {
 	f.String(prefix+"type", "forwarder", "forwarder, aggregator or sequencer")
 	f.Uint64(prefix+"chain-id", 42161, "chain id of the arbitrum chain")
 	return nil
+}
+
+type NodeCache struct {
+	AllowSlowLookup  bool          `koanf:"allow-slow-lookup"`
+	LRUSize          int           `koanf:"lru-size"`
+	TimedInitialSize int           `koanf:"timed-initial-size"`
+	TimedExpire      time.Duration `koanf:"timed-expire"`
+}
+
+func addNodeCacheOptions(f *flag.FlagSet, prefix string) {
+	f.Bool(prefix+"allow-slow-lookup", false, "load L2 block from disk if not in memory cache")
+	f.Int(prefix+"lru-size", 20, "number of recently used L2 blocks to hold in lru memory cache")
+	//f.Duration("timed-expire", 20*time.Minute, "length of time to hold L2 blocks in timed memory cache")
 }
 
 type Persistent struct {
@@ -321,15 +351,17 @@ func addRollupOptions(f *flag.FlagSet, prefix string) {
 }
 
 type Validator struct {
-	Strategy             string `koanf:"strategy"`
-	UtilsAddress         string `koanf:"utils-address"`
-	WalletFactoryAddress string `koanf:"wallet-factory-address"`
+	Strategy             string            `koanf:"strategy"`
+	UtilsAddress         string            `koanf:"utils-address"`
+	WalletFactoryAddress string            `koanf:"wallet-factory-address"`
+	L1PostingStrategy    L1PostingStrategy `koanf:"l1-posting-strategy"`
 }
 
 func addValidatorOptions(f *flag.FlagSet, prefix string) {
 	f.String(prefix+"strategy", "StakeLatest", "strategy for validator to use")
 	f.String(prefix+"utils-address", "", "strategy for validator to use")
 	f.String(prefix+"wallet-factory-address", "", "strategy for validator to use")
+	addL1PostingStrategyOptions(f, prefix+"l1-posting-strategy.")
 }
 
 type Wallet struct {
@@ -405,7 +437,6 @@ func ParseValidator(ctx context.Context, args []string) (*Config, *Wallet, strin
 
 func parseNonRelay(ctx context.Context, f *flag.FlagSet, k *koanf.Koanf, args []string) (*Config, *Wallet, string, *big.Int, error) {
 	addCoreOptions(f, "core.")
-
 	f.String("bridge-utils-address", "", "bridgeutils contract address")
 
 	f.Float64("gas-price", 0, "float of gas price to use in gwei (0 = use L1 node's recommended value)")
